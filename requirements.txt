@@ -1,0 +1,35 @@
+# Core Tools
+setuptools==68.2.2
+wheel==0.41.2
+
+# Web Frameworks
+Flask==2.3.3
+FastAPI==0.103.2
+uvicorn==0.23.2
+gunicorn==21.2.0
+
+# Database
+SQLAlchemy==2.0.21
+psycopg2-binary==2.9.9
+
+# API
+requests==2.31.0
+httpx==0.25.1
+
+# Testing
+pytest==7.4.2
+pytest-cov==4.1.0
+
+# Documentation
+Sphinx==7.2.5
+
+# Utils
+python-dotenv==1.0.0
+pydantic==2.2.2
+
+# Security
+python-jose==3.3.0
+passlib==1.7.4
+
+# Task Queues
+celery==5.3.4
