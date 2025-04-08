@@ -1,0 +1,49 @@
+import pytest
+import os
+import pkg_resources
+
+# -----------------------------------------------------------------------------
+# Since requirements.txt is simply a list of dependencies, the tests below
+# check for file existence, non-empty content, and parsability.
+# -----------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def requirements_content():
+    """Fixture to read the content of the requirements.txt file."""
+    file_path = os.path.join(os.path.dirname(__file__), '..', 'requirements.txt')
+    if not os.path.exists(file_path):
+        pytest.fail("requirements.txt file is missing.")
+    with open(file_path, 'r') as f:
+        return f.read()
+
+def test_requirements_file_exists(requirements_content):
+    """
+    Test that the requirements.txt file exists and was read by the fixture.
+    """
+    assert requirements_content is not None, "requirements.txt content could not be read."
+
+def test_requirements_file_not_empty(requirements_content):
+    """
+    Test that the requirements.txt file is not empty.
+    """
+    assert requirements_content.strip() != "", "requirements.txt is empty."
+
+def test_requirements_can_be_parsed(requirements_content):
+    """
+    Test that the dependencies in requirements.txt can be parsed without errors.
+    """
+    try:
+        list(pkg_resources.parse_requirements(requirements_content))
+    except Exception as e:
+        pytest.fail(f"Failed to parse requirements.txt: {e}")
+
+def test_requirements_content_validity(requirements_content):
+    """
+    Example test to validate that certain known dependencies might be present.
+    Adjust or remove as needed based on your project's requirements.
+    """
+    # NOTE: Replace 'fastapi' with any dependency you expect to have.
+    expected_dependency = "fastapi"
+    assert expected_dependency in requirements_content, (
+        f"Expected dependency '{expected_dependency}' not found in requirements.txt"
+    )
