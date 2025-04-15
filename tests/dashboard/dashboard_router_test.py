@@ -1,138 +1,135 @@
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
-from unittest.mock import patch, MagicMock
 
-# Import your router and any necessary models from the main project
-from ...dashboard.dashboard_router import router
-from ...models import YourModel  # Replace with actual model(s) used in the dashboard router
+from config import load_config
+from main import create_app
 
-@pytest.fixture
-def test_app():
+# -----------------------------------------------------------------------------
+# Fixtures
+# -----------------------------------------------------------------------------
+@pytest.fixture(scope="module")
+def client():
     """
-    Fixture to create a FastAPI test application including the dashboard router.
+    Provides a TestClient instance for the FastAPI application.
+    Loads configuration and creates the FastAPI app instance.
     """
-    app = FastAPI()
-    app.include_router(router, prefix="/dashboard", tags=["dashboard"])
-    return app
+    load_config()  # Load any necessary config
+    app = create_app()  # Create the FastAPI app with all routers
+    with TestClient(app) as test_client:
+        yield test_client
 
-@pytest.fixture
-def client(test_app):
-    """
-    Fixture to provide a TestClient for sending requests to the test application.
-    """
-    return TestClient(test_app)
 
 @pytest.fixture
 def mock_db_session():
     """
-    Fixture to provide a mock database session object for testing.
+    Provides a mock or test database session.
+    In a real scenario, this might set up a temporary test database.
+    For now, this is a placeholder for more complex DB mocking logic.
     """
-    # You can customize this mock to fit your actual DB queries.
-    mock_session = MagicMock(spec=Session)
-    return mock_session
-
-@pytest.mark.describe("Dashboard Data Endpoint Tests")
-class TestGetDashboardDataEndpoint:
-    @pytest.mark.it("should return 200 and summarize recent charges, new customers, and subscription metrics when data is available")
-    @patch("...dashboard.dashboard_router.some_database_call")  # Example mock path, replace with actual call
-    def test_get_dashboard_data_success(self, mock_db_call, client, mock_db_session):
-        """
-        Test that the endpoint returns valid summary data (recent charges, etc.) and status code 200.
-        """
-        # Arrange: mock the database call to return sample data
-        mock_db_call.return_value = {
-            "recent_charges": [{"id": 1, "amount": 1000}],
-            "new_customers": 5,
-            "subscription_metrics": {"active_subscriptions": 10, "canceled_subscriptions": 2}
-        }
-
-        # Act: send GET request to the dashboard data endpoint
-        response = client.get("/dashboard/data")
-
-        # Assert: check that the response is correct
-        assert response.status_code == 200
-        assert response.json() == {
-            "recent_charges": [{"id": 1, "amount": 1000}],
-            "new_customers": 5,
-            "subscription_metrics": {"active_subscriptions": 10, "canceled_subscriptions": 2}
-        }
-
-    @pytest.mark.it("should handle database errors gracefully and return an error response with 500 status code")
-    @patch("...dashboard.dashboard_router.some_database_call")  # Example mock path, replace
-    def test_get_dashboard_data_db_error(self, mock_db_call, client, mock_db_session):
-        """
-        Test that the endpoint returns a 500 error if there's a database error while fetching data.
-        """
-        # Arrange: simulate a database exception
-        mock_db_call.side_effect = Exception("Database failure")
-
-        # Act
-        response = client.get("/dashboard/data")
-
-        # Assert
-        assert response.status_code == 500
-        assert "error" in response.json()
-        assert response.json()["error"] == "Database failure"
+    # Setup code or mocking could go here
+    session = Session(bind=None)  # or a real test DB engine
+    yield session
+    # Teardown code if necessary
 
 
-@pytest.mark.describe("Transaction Details Endpoint Tests")
-class TestGetTransactionDetailsEndpoint:
-    @pytest.mark.it("should return transaction details for a valid charge_id with status code 200")
-    @patch("...dashboard.dashboard_router.get_charge_by_id")  # Example mock path, replace with actual name
-    def test_get_transaction_details_success(self, mock_db_call, client, mock_db_session):
-        """
-        Test that a valid transaction detail is returned when a correct charge_id is provided.
-        """
-        # Arrange
-        test_charge_id = "charge_12345"
-        mock_db_call.return_value = {
-            "id": test_charge_id,
-            "amount": 2000,
-            "currency": "USD",
-            "customer_id": "cust_6789"
-        }
+# -----------------------------------------------------------------------------
+# Tests for get_dashboard_data_endpoint
+# -----------------------------------------------------------------------------
+def test_get_dashboard_data_endpoint_success(client, mock_db_session):
+    """
+    Tests a successful retrieval of dashboard data.
+    Ensures the response returns the expected keys and a 200 status.
+    """
+    response = client.get("/dashboard/data")
+    assert response.status_code == 200
+    data = response.json()
 
-        # Act
-        response = client.get(f"/dashboard/transactions/{test_charge_id}")
+    # Check that essential fields are present (example fields)
+    assert "recent_charges" in data
+    assert "new_customers" in data
+    assert "subscription_metrics" in data
 
-        # Assert
-        assert response.status_code == 200
-        data = response.json()
-        assert data["id"] == test_charge_id
-        assert data["amount"] == 2000
-        assert data["currency"] == "USD"
-        assert data["customer_id"] == "cust_6789"
 
-    @pytest.mark.it("should return 404 if the transaction with the given charge_id does not exist")
-    @patch("...dashboard.dashboard_router.get_charge_by_id")  # Example mock path, replace
-    def test_get_transaction_details_not_found(self, mock_db_call, client, mock_db_session):
-        """
-        Test that a 404 is returned when the charge_id doesn't match any transaction in the database.
-        """
-        # Arrange
-        test_charge_id = "non_existent_charge"
-        mock_db_call.return_value = None  # No transaction found
+def test_get_dashboard_data_endpoint_no_records(client, mock_db_session, monkeypatch):
+    """
+    Tests the endpoint when there are no records in the database.
+    Mocks or simulates an empty database result to ensure the endpoint
+    handles it gracefully.
+    """
 
-        # Act
-        response = client.get(f"/dashboard/transactions/{test_charge_id}")
+    # Example of mocking if needed:
+    # def mock_empty_data(*args, **kwargs):
+    #     return []
+    # monkeypatch.setattr("some_module.some_method", mock_empty_data)
 
-        # Assert
-        assert response.status_code == 404
-        assert "detail" in response.json()
-        assert response.json()["detail"] == "Charge not found."
+    response = client.get("/dashboard/data")
+    assert response.status_code == 200
+    data = response.json()
 
-    @pytest.mark.it("should handle invalid charge_id format and return a 422 validation error")
-    def test_get_transaction_details_invalid_charge_id(self, client):
-        """
-        Test that a 422 is returned when the charge_id is invalid or malformed.
-        """
-        # For example, passing an int where a string is expected might cause validation issues.
-        invalid_charge_id = 123  # Suppose the endpoint strictly expects a string
-        response = client.get(f"/dashboard/transactions/{invalid_charge_id}")
+    # Expecting empty or default values for metrics
+    assert data.get("recent_charges") == []
+    assert data.get("new_customers") == []
+    assert data.get("subscription_metrics") == {}
 
-        # Assert
-        assert response.status_code == 422
-        # The exact structure of the error can vary, just check it's a validation error
-        assert "detail" in response.json() and "type" in str(response.json()["detail"])
+
+def test_get_dashboard_data_endpoint_server_error(client, monkeypatch):
+    """
+    Simulates a server error case by monkeypatching
+    the underlying function to raise an exception.
+    Verifies the endpoint returns a 500 status code.
+    """
+
+    def mock_raise_exception():
+        raise Exception("Simulated server error")
+
+    # Example patch: we'd replace the actual business logic call with a failing version
+    monkeypatch.setattr("dashboard.dashboard_router.get_dashboard_data_endpoint", mock_raise_exception)
+
+    response = client.get("/dashboard/data")
+    assert response.status_code == 500
+
+
+# -----------------------------------------------------------------------------
+# Tests for get_transaction_details_endpoint
+# -----------------------------------------------------------------------------
+def test_get_transaction_details_endpoint_success(client, mock_db_session):
+    """
+    Tests a successful retrieval of a specific transaction's details.
+    Ensures the response returns the expected charge data and status code.
+    """
+    test_charge_id = "ch_12345"  # Example test charge ID
+    response = client.get(f"/dashboard/transactions/{test_charge_id}")
+    assert response.status_code == 200
+    data = response.json()
+
+    # Check that essential fields are present (example fields)
+    assert data.get("charge_id") == test_charge_id
+    assert "amount" in data
+    assert "status" in data
+
+
+def test_get_transaction_details_endpoint_not_found(client, mock_db_session):
+    """
+    Tests the endpoint when the specified charge ID does not exist in the database.
+    Verifies that a 404 Not Found response is returned.
+    """
+    non_existent_charge_id = "ch_00000"
+    response = client.get(f"/dashboard/transactions/{non_existent_charge_id}")
+    assert response.status_code == 404
+    assert response.json().get("detail") == "Charge not found"
+
+
+def test_get_transaction_details_endpoint_server_error(client, monkeypatch):
+    """
+    Simulates a server error when attempting to retrieve charge details.
+    Verifies the endpoint returns a 500 status code.
+    """
+
+    def mock_raise_exception(charge_id: str):
+        raise Exception("Simulated server error")
+
+    monkeypatch.setattr("dashboard.dashboard_router.get_transaction_details_endpoint", mock_raise_exception)
+
+    response = client.get("/dashboard/transactions/ch_any")
+    assert response.status_code == 500

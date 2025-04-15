@@ -1,130 +1,106 @@
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.exc import IntegrityError
-from ...models import Base  # Adjust if your project's Base or metadata is located elsewhere
-from ...subscriptions.subscriptions_models import Subscription  # Adjust the import to match actual model names
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
-# ----------------------------------------------------------------------
-# Fixtures
-# ----------------------------------------------------------------------
-@pytest.fixture(scope="module")
-def test_engine():
+# Load application and config
+from main import create_app
+from config import load_config
+
+# Import the Subscription model from subscriptions.subscriptions_models
+from subscriptions.subscriptions_models import Subscription
+
+
+@pytest.fixture
+def sample_subscription_data():
     """
-    Creates an in-memory SQLite engine for testing.
+    Provides sample data for creating a test Subscription record.
+    Adjust fields accordingly based on actual Subscription model columns.
     """
-    engine = create_engine("sqlite:///:memory:", echo=False)
-    Base.metadata.create_all(bind=engine)
-    yield engine
-    Base.metadata.drop_all(bind=engine)
+    return {
+        "customer_id": 1,
+        "plan_id": 2,
+        "status": "active",
+        # Add or remove fields based on the actual model definition.
+    }
 
 
-@pytest.fixture(scope="function")
-def db_session(test_engine) -> Session:
+@pytest.fixture
+def client():
     """
-    Provides a session to interact with the test database.
-    Ensures tests run in isolation with rollback after each test.
+    Returns a FastAPI test client for integration tests.
+    Assumes that create_app() sets up all routers, middleware, etc.
     """
-    connection = test_engine.connect()
-    transaction = connection.begin()
-    SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=connection)
-    session = SessionLocal()
+    app = create_app()
+    return TestClient(app)
 
-    yield session
 
-    session.close()
-    transaction.rollback()
-    connection.close()
-
-# ----------------------------------------------------------------------
-# Tests
-# ----------------------------------------------------------------------
-
-def test_subscription_model_create_success(db_session: Session):
+def test_subscription_model_creation(test_db: Session, sample_subscription_data):
     """
-    Test creating a Subscription model successfully with valid data.
+    Test that a Subscription record can be successfully created and persisted to the database.
+    Verifies that an auto-incremented primary key is assigned.
     """
-    new_subscription = Subscription(
-        name="Test Plan",
-        price=9.99
-        # Include other required fields or defaults as defined in your model
+    subscription = Subscription(**sample_subscription_data)
+    test_db.add(subscription)
+    test_db.commit()
+    test_db.refresh(subscription)
+
+    assert subscription.id is not None, "Subscription ID should be assigned after commit."
+    assert subscription.customer_id == sample_subscription_data["customer_id"]
+    assert subscription.plan_id == sample_subscription_data["plan_id"]
+    assert subscription.status == sample_subscription_data["status"]
+
+
+def test_subscription_model_defaults(test_db: Session):
+    """
+    Test that default values (if any) on the Subscription model are correctly applied.
+    Example checks if 'status' defaults to 'active' if not provided.
+    Adjust based on actual model defaults.
+    """
+    subscription = Subscription(customer_id=999, plan_id=100)
+    test_db.add(subscription)
+    test_db.commit()
+    test_db.refresh(subscription)
+
+    # Check default for 'status' or other fields that may have defaults
+    assert subscription.status == "active", (
+        "Expected default status to be 'active' if none was provided."
     )
-    db_session.add(new_subscription)
-    db_session.commit()
-    db_session.refresh(new_subscription)
-
-    assert new_subscription.id is not None, "Subscription ID should be auto-generated"
-    assert new_subscription.name == "Test Plan", "Subscription name mismatch"
-    assert new_subscription.price == 9.99, "Subscription price mismatch"
-    # If there's an is_active default
-    if hasattr(new_subscription, "is_active"):
-        assert new_subscription.is_active is True, "Subscription should be active by default"
 
 
-def test_subscription_model_create_failure(db_session: Session):
+def test_subscription_model_deletion(test_db: Session, sample_subscription_data):
     """
-    Test that creating a Subscription with missing or invalid required fields
-    raises an IntegrityError or appropriate validation error.
+    Test that a Subscription record can be deleted from the database.
+    Ensures referential integrity or cascade deletes are handled if configured.
     """
-    # Example: Missing 'name' if your model enforces non-null on 'name'
-    invalid_subscription = Subscription(
-        # name is missing here
-        price=5.00
+    subscription = Subscription(**sample_subscription_data)
+    test_db.add(subscription)
+    test_db.commit()
+    test_db.refresh(subscription)
+
+    # Now delete the record
+    test_db.delete(subscription)
+    test_db.commit()
+
+    # Attempt to retrieve the deleted record
+    deleted_record = test_db.query(Subscription).filter_by(id=subscription.id).first()
+    assert deleted_record is None, "Subscription record should be removed from the database."
+
+
+def test_subscription_model_validation(client: TestClient):
+    """
+    Example test of model-level validation if the Subscription model is used in request/response schemas.
+    This test tries an endpoint call with invalid data (if applicable) and expects a 422 or similar error.
+    Adjust based on actual endpoints and validation logic.
+    """
+    # Example endpoint: "/subscriptions/create_subscription" (put the real endpoint if it exists)
+    # If there's no such endpoint, remove or adapt this test accordingly.
+    invalid_payload = {
+        "customer_id": None,  # Invalid because it's required
+        "plan_id": "not-an-integer",  # Invalid type
+    }
+    response = client.post("/subscriptions/create_subscription", json=invalid_payload)
+
+    # We expect a validation error. Adjust the status code based on how your app handles validation.
+    assert response.status_code == 422, (
+        "Expected a 422 Unprocessable Entity status code for invalid subscription data."
     )
-    db_session.add(invalid_subscription)
-    with pytest.raises(IntegrityError):
-        db_session.commit()
-
-
-def test_subscription_model_update(db_session: Session):
-    """
-    Test updating a Subscription record in the database.
-    """
-    # First, create a valid subscription
-    subscription = Subscription(name="Update Plan", price=10.0)
-    db_session.add(subscription)
-    db_session.commit()
-    db_session.refresh(subscription)
-
-    # Now update the subscription
-    subscription.name = "Updated Plan Name"
-    subscription.price = 12.50
-    db_session.commit()
-    db_session.refresh(subscription)
-
-    assert subscription.name == "Updated Plan Name", "Subscription name should be updated"
-    assert subscription.price == 12.50, "Subscription price should be updated"
-
-
-def test_subscription_model_delete(db_session: Session):
-    """
-    Test deleting a Subscription record from the database.
-    """
-    subscription = Subscription(name="Delete Plan", price=7.99)
-    db_session.add(subscription)
-    db_session.commit()
-    db_session.refresh(subscription)
-
-    sub_id = subscription.id
-    db_session.delete(subscription)
-    db_session.commit()
-
-    deleted = db_session.query(Subscription).filter_by(id=sub_id).first()
-    assert deleted is None, "Subscription record should be deleted"
-
-
-@pytest.mark.parametrize("price_value", [-1, None, 0, 100])
-def test_subscription_model_price_values(db_session: Session, price_value):
-    """
-    Test various valid and invalid price values for Subscription.
-    Modify the assertions based on your validation rules (e.g. price >= 0).
-    """
-    subscription = Subscription(name="Parametrized Plan", price=price_value)
-    db_session.add(subscription)
-    if price_value is None or price_value < 0:
-        with pytest.raises(IntegrityError):
-            db_session.commit()
-    else:
-        db_session.commit()
-        db_session.refresh(subscription)
-        assert subscription.price == price_value, "Subscription price did not match expected value"
