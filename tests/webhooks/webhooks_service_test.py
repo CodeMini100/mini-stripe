@@ -1,129 +1,128 @@
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
-# Import the functions to test
-from ...webhooks.webhooks_service import handle_charge_succeeded, handle_subscription_renewed
+# ----------------------------------------------------------------
+# Import the functions to be tested from the project root modules
+# ----------------------------------------------------------------
+from webhooks.webhooks_service import handle_charge_succeeded, handle_subscription_renewed
+# We will mock calls to payments.payments_service and subscriptions.subscriptions_service
+# since those are the likely modules that handle charge/subscription logic.
 
-# Example model imports (adjust based on your actual models)
-# from ...models import Payment, Subscription
-
-# Example DB session import (adjust or remove if your code does not use a DB session)
-# from sqlalchemy.orm import Session
-
+# ----------------------------------------------------------------------------------------
+# Test Suite for webhooks_service.py
+# ----------------------------------------------------------------------------------------
 
 @pytest.fixture
-def mock_db_session():
+def valid_charge_event():
     """
-    Fixture that provides a mock database session for testing.
-    Replace or remove if you do not actually use a database session.
+    Returns a valid event_data dictionary commonly received from a charge succeeded webhook.
     """
-    # Create a mock Session object
-    session = MagicMock()
-    yield session
-    # Teardown logic if needed
+    return {
+        "charge_id": "ch_12345",
+        "amount": 2000,
+        "currency": "usd",
+        "customer_id": "cus_67890",
+        "status": "succeeded",
+    }
 
+@pytest.fixture
+def valid_subscription_event():
+    """
+    Returns a valid event_data dictionary commonly received from a subscription renewal webhook.
+    """
+    return {
+        "subscription_id": "sub_ABC123",
+        "customer_id": "cus_67890",
+        "plan_id": "plan_999",
+        "event_type": "renewed",
+    }
 
-@pytest.mark.describe("handle_charge_succeeded function")
-class TestHandleChargeSucceeded:
-    @pytest.mark.it("should process a valid charge succeeded event without errors")
-    def test_handle_charge_succeeded_valid(self, mock_db_session):
-        # Arrange
-        event_data = {
-            "charge_id": "ch_abc123",
-            "amount": 1000,
-            "currency": "usd",
-            "customer_id": "cus_xyz321",
-            "metadata": {"order_id": "order_123"}
-        }
+# ----------------------------------------------------------------------------------------
+# handle_charge_succeeded(event_data) Tests
+# ----------------------------------------------------------------------------------------
 
-        # Act
-        try:
-            handle_charge_succeeded(event_data, db_session=mock_db_session)
-        except Exception as e:
-            pytest.fail(f"Unexpected exception occurred: {e}")
+def test_handle_charge_succeeded_success(mocker, valid_charge_event):
+    """
+    Test that handle_charge_succeeded processes a valid charge event successfully and 
+    routes to the payments service (mocked).
+    """
+    # Mocking whatever function might be called in payments_service, e.g., an update or status change.
+    mock_mark_succeeded = mocker.patch("payments.payments_service.create_charge", return_value={"id": "ch_12345"})
+    
+    # Call the function under test
+    result = handle_charge_succeeded(valid_charge_event)
 
-        # Assert
-        # Check that the database methods were called as expected, if relevant
-        # e.g., mock_db_session.add.assert_called_once()
-        # mock_db_session.commit.assert_called_once()
+    # Assert that the mock was called with expected arguments
+    # (Adjust based on actual usage in your implementation)
+    mock_mark_succeeded.assert_called_once_with(
+        customer_id=valid_charge_event["customer_id"],
+        amount=valid_charge_event["amount"],
+        payment_method="webhook_succeeded_event"
+    )
+    
+    # Assert the function returns or processes data as expected
+    # (Adjust these assertions to match your implementation's return type or side effects)
+    assert result is not None
+    assert "id" in result
 
-    @pytest.mark.it("should raise an exception if charge_id is missing in event data")
-    def test_handle_charge_succeeded_missing_charge_id(self, mock_db_session):
-        # Arrange
-        event_data = {
-            "amount": 1000,
-            "currency": "usd",
-            "customer_id": "cus_xyz321"
-        }
+def test_handle_charge_succeeded_missing_charge_id(mocker):
+    """
+    Test that handle_charge_succeeded raises an error or handles the case
+    where the charge_id is missing from the event_data.
+    """
+    bad_event_data = {
+        "amount": 2000,
+        "currency": "usd",
+        "customer_id": "cus_67890",
+        "status": "succeeded",
+    }
 
-        # Act & Assert
-        with pytest.raises(KeyError):
-            handle_charge_succeeded(event_data, db_session=mock_db_session)
+    # We can mock the payments service to ensure it is NOT called
+    mock_mark_succeeded = mocker.patch("payments.payments_service.create_charge", return_value={"id": "ch_12345"})
+    
+    with pytest.raises(KeyError):
+        handle_charge_succeeded(bad_event_data)
 
-    @pytest.mark.it("should handle errors gracefully if the event data is invalid")
-    def test_handle_charge_succeeded_invalid_data(self, mock_db_session):
-        # Arrange
-        event_data = {
-            "charge_id": 123,  # Invalid type for demonstration
-            "amount": "one thousand",  # Invalid type for demonstration
-        }
+    # Verify that the payment service was never called
+    mock_mark_succeeded.assert_not_called()
 
-        # Act
-        with pytest.raises(ValueError):
-            handle_charge_succeeded(event_data, db_session=mock_db_session)
+# ----------------------------------------------------------------------------------------
+# handle_subscription_renewed(event_data) Tests
+# ----------------------------------------------------------------------------------------
 
+def test_handle_subscription_renewed_success(mocker, valid_subscription_event):
+    """
+    Test that handle_subscription_renewed processes a valid subscription renewal event and
+    calls the subscriptions service (mocked).
+    """
+    # Mock the service function that would be triggered upon successful renewal
+    mock_generate_invoice = mocker.patch("subscriptions.subscriptions_service.generate_invoice", return_value={"invoice_id": "inv_987"})
+    
+    # Call the function under test
+    result = handle_subscription_renewed(valid_subscription_event)
 
-@pytest.mark.describe("handle_subscription_renewed function")
-class TestHandleSubscriptionRenewed:
-    @pytest.mark.it("should renew subscription successfully with valid event data")
-    def test_handle_subscription_renewed_valid(self, mock_db_session):
-        # Arrange
-        event_data = {
-            "subscription_id": "sub_123abc",
-            "renewal_date": "2023-12-31",
-            "customer_id": "cus_xyz321"
-        }
+    # Assert that the mock was called with the correct subscription_id
+    mock_generate_invoice.assert_called_once_with(valid_subscription_event["subscription_id"])
+    
+    # Assert the returned or processed data is as expected
+    assert result is not None
+    assert "invoice_id" in result
 
-        # Act
-        try:
-            handle_subscription_renewed(event_data, db_session=mock_db_session)
-        except Exception as e:
-            pytest.fail(f"Unexpected exception occurred: {e}")
+def test_handle_subscription_renewed_missing_subscription_id(mocker):
+    """
+    Test that handle_subscription_renewed raises an error or handles the scenario
+    where the subscription_id is missing from the event_data.
+    """
+    bad_event_data = {
+        "customer_id": "cus_67890",
+        "plan_id": "plan_999",
+        "event_type": "renewed",
+    }
 
-        # Assert
-        # Check that the subscription was updated correctly, if relevant
-        # e.g., mock_db_session.commit.assert_called_once()
+    mock_generate_invoice = mocker.patch("subscriptions.subscriptions_service.generate_invoice")
 
-    @pytest.mark.it("should raise an exception if subscription_id is missing")
-    def test_handle_subscription_renewed_missing_subscription_id(self, mock_db_session):
-        # Arrange
-        event_data = {
-            "renewal_date": "2023-12-31",
-            "customer_id": "cus_xyz321"
-        }
+    with pytest.raises(KeyError):
+        handle_subscription_renewed(bad_event_data)
 
-        # Act & Assert
-        with pytest.raises(KeyError):
-            handle_subscription_renewed(event_data, db_session=mock_db_session)
-
-    @pytest.mark.it("should handle errors if the subscription cannot be renewed")
-    @patch("...webhooks.webhooks_service.some_renewal_function")  # Example function to mock
-    def test_handle_subscription_renewed_renewal_failure(self, mock_renewal_func, mock_db_session):
-        """
-        Demonstrates how to mock a function called internally that might fail.
-        Adjust the patch path and function name based on actual implementation.
-        """
-        # Arrange
-        event_data = {
-            "subscription_id": "sub_123abc",
-            "renewal_date": "2023-12-31",
-            "customer_id": "cus_xyz321"
-        }
-        mock_renewal_func.side_effect = Exception("Renewal failed")
-
-        # Act & Assert
-        with pytest.raises(Exception, match="Renewal failed"):
-            handle_subscription_renewed(event_data, db_session=mock_db_session)
-
-        # Ensure it was called
-        mock_renewal_func.assert_called_once()
+    # Ensure no invoice generation was attempted
+    mock_generate_invoice.assert_not_called()

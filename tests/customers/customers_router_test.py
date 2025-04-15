@@ -1,103 +1,116 @@
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy.orm import Session
+from unittest.mock import patch, MagicMock
 
-# Required model import (adapt as needed for your actual model):
-from ...models import YourModel
-
-# Import the router or endpoints from the customers_router file
-from ...customers.customers_router import router
-
-
-@pytest.fixture(scope="module")
-def test_app():
-    """
-    Create a FastAPI test application by including the customers router.
-    This fixture is used to generate a TestClient for HTTP requests.
-    """
-    app = FastAPI()
-    app.include_router(router, prefix="/customers", tags=["customers"])
-    yield app
-
-
-@pytest.fixture(scope="module")
-def client(test_app):
-    """
-    Returns a TestClient instance for sending requests to the FastAPI test application.
-    """
-    return TestClient(test_app)
+from main import create_app
 
 
 @pytest.fixture
-def db_session():
+def client():
     """
-    Provide a mock or real database session for testing database operations.
-    This fixture should be adjusted to reflect your test database setup.
+    Fixture to create a TestClient instance of the FastAPI app.
     """
-    # Set up your test database session here
-    session = Session()  # This is symbolic; replace with your actual session setup.
-    yield session
-    # Teardown logic (close connection, rollback, etc.) goes here
+    app = create_app()
+    return TestClient(app)
 
 
-def test_create_customer_success(client, db_session):
-    """
-    Test creating a new customer with valid data.
-    Expects a successful response and a newly created customer record.
-    """
-    valid_payload = {
-        "name": "Jane Doe",
-        "email": "jane.doe@example.com"
-    }
+@pytest.mark.describe("create_customer_endpoint tests")
+class TestCreateCustomerEndpoint:
 
-    response = client.post("/customers", json=valid_payload)
-    assert response.status_code == 201, "Expected customer creation to return a 201 status code"
-    data = response.json()
-    assert "id" in data, "Response JSON should contain 'id' after successful creation"
-    assert data["name"] == valid_payload["name"], "Customer name in response should match input"
-    assert data["email"] == valid_payload["email"], "Customer email in response should match input"
+    @pytest.mark.it("should successfully create a new customer when valid data is provided")
+    @patch("customers.customers_service.create_customer")
+    def test_create_customer_success(self, mock_create_customer, client):
+        # Arrange: mock the service layer to return a mocked customer object
+        mock_create_customer.return_value = {
+            "id": 1,
+            "name": "John Doe",
+            "email": "john@example.com",
+            "payment_info": "card_123"
+        }
+
+        # Act: send a POST request with valid JSON
+        response = client.post("/customers", json={
+            "name": "John Doe",
+            "email": "john@example.com",
+            "payment_info": "card_123"
+        })
+
+        # Assert: check the status code and response body
+        assert response.status_code == 201
+        data = response.json()
+        assert data["id"] == 1
+        assert data["name"] == "John Doe"
+        assert data["email"] == "john@example.com"
+        mock_create_customer.assert_called_once_with(
+            "John Doe",
+            "john@example.com",
+            "card_123"
+        )
+
+    @pytest.mark.it("should return a validation error (422) when required fields are missing")
+    @patch("customers.customers_service.create_customer")
+    def test_create_customer_missing_fields(self, mock_create_customer, client):
+        # Arrange: do not configure the mock to return anything because it shouldn't be called
+        # Act: send a POST request with missing fields
+        response = client.post("/customers", json={"name": "OnlyNameProvided"})
+
+        # Assert: FastAPI should return a 422 for validation failure
+        assert response.status_code == 422
+        mock_create_customer.assert_not_called()
+
+    @pytest.mark.it("should handle internal service errors gracefully (e.g., return 500)")
+    @patch("customers.customers_service.create_customer", side_effect=Exception("Service error"))
+    def test_create_customer_internal_error(self, mock_create_customer, client):
+        # Act: send a valid POST request
+        response = client.post("/customers", json={
+            "name": "John Doe",
+            "email": "john@example.com",
+            "payment_info": "card_123"
+        })
+
+        # Assert: check the status code for internal server error or custom error handling
+        assert response.status_code == 500
+        assert "Service error" in response.text
 
 
-def test_create_customer_missing_fields(client, db_session):
-    """
-    Test creating a new customer with missing required fields.
-    Expects a validation or bad request error response.
-    """
-    invalid_payload = {
-        "name": "John Doe"
-        # 'email' is missing
-    }
+@pytest.mark.describe("get_customer_endpoint tests")
+class TestGetCustomerEndpoint:
 
-    response = client.post("/customers", json=invalid_payload)
-    assert response.status_code in [400, 422], "Expected a 400 or 422 status code for missing fields"
+    @pytest.mark.it("should return customer details when the customer exists")
+    @patch("customers.customers_service.fetch_customer")
+    def test_get_customer_success(self, mock_fetch_customer, client):
+        # Arrange: mock the service layer to return a mocked customer object
+        mock_fetch_customer.return_value = {
+            "id": 1,
+            "name": "John Doe",
+            "email": "john@example.com"
+        }
 
+        # Act: send a GET request to retrieve the customer
+        response = client.get("/customers/1")
 
-def test_get_customer_success(client, db_session):
-    """
-    Test fetching an existing customer's details by ID.
-    Expects a successful response with the correct customer data.
-    """
-    # First, create a customer to have a valid ID to retrieve.
-    create_response = client.post("/customers", json={"name": "Bob Smith", "email": "bob.smith@example.com"})
-    assert create_response.status_code == 201, "Expected customer creation to succeed for test setup"
-    created_customer = create_response.json()
-    created_id = created_customer["id"]
+        # Assert: check that the response is successful and data matches
+        assert response.status_code == 200
+        data = response.json()
+        assert data["id"] == 1
+        assert data["name"] == "John Doe"
+        assert data["email"] == "john@example.com"
+        mock_fetch_customer.assert_called_once_with(1)
 
-    # Now, retrieve the newly created customer
-    get_response = client.get(f"/customers/{created_id}")
-    assert get_response.status_code == 200, "Expected to successfully retrieve a customer by valid ID"
-    fetched_customer = get_response.json()
-    assert fetched_customer["id"] == created_id, "Fetched customer ID should match the created ID"
-    assert fetched_customer["name"] == "Bob Smith", "Fetched customer name should match the created customer"
-    assert fetched_customer["email"] == "bob.smith@example.com", "Fetched customer email should match the created customer"
+    @pytest.mark.it("should return 404 when the customer does not exist")
+    @patch("customers.customers_service.fetch_customer", return_value=None)
+    def test_get_customer_not_found(self, mock_fetch_customer, client):
+        # Act: send a GET request with an ID that doesn't exist
+        response = client.get("/customers/999")
 
+        # Assert: check that a 404 is returned for non-existent customer
+        assert response.status_code == 404
+        mock_fetch_customer.assert_called_once_with(999)
 
-def test_get_customer_not_found(client, db_session):
-    """
-    Test requesting a customer with an ID that does not exist.
-    Expects a 404 status code for non-existent resource.
-    """
-    non_existent_id = 999999999
-    response = client.get(f"/customers/{non_existent_id}")
-    assert response.status_code == 404, "Expected 404 when retrieving a non-existent customer"
+    @pytest.mark.it("should handle invalid customer ID formats gracefully")
+    def test_get_customer_invalid_id(self, client):
+        # Act: pass a non-integer ID, expecting FastAPI's validation to fail (422)
+        response = client.get("/customers/abc")
+
+        # Assert: check that it fails validation
+        assert response.status_code == 422

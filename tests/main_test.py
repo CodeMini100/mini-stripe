@@ -1,59 +1,95 @@
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from unittest.mock import patch
-from ..main import create_app, run_app
 
-# -----------------------------------------------------------------------------------
-# Test Setup / Teardown (if needed)
-# -----------------------------------------------------------------------------------
+from main import create_app, run_app
+
+# --------------------------------------------------------------------------------
+# FIXTURES
+# --------------------------------------------------------------------------------
 @pytest.fixture
 def client():
     """
-    Fixture to initialize the FastAPI TestClient with the application.
+    Fixture to create a TestClient instance using the FastAPI app
     """
     app = create_app()
     return TestClient(app)
 
-# -----------------------------------------------------------------------------------
-# Tests for create_app()
-# -----------------------------------------------------------------------------------
-def test_create_app_instance():
+# --------------------------------------------------------------------------------
+# TESTS FOR create_app()
+# --------------------------------------------------------------------------------
+def test_create_app_returns_fastapi_instance():
     """
-    Test that create_app() returns a valid FastAPI instance.
+    Test that create_app() returns an instance of FastAPI
     """
     app = create_app()
-    assert app is not None, "create_app() should return a valid FastAPI object"
+    assert isinstance(app, FastAPI), "create_app() should return a FastAPI instance"
 
-def test_create_app_with_test_client(client):
+def test_create_app_includes_routers():
     """
-    Test that the FastAPI instance can work with TestClient without errors.
+    Test that create_app() includes mandatory routers by checking expected endpoint paths
+    """
+    app = create_app()
+    route_paths = {route.path for route in app.routes}
+
+    # Check a few known routes from the provided project description
+    expected_substrings = [
+        "/payments/create_charge",
+        "/payments/refund_charge",
+        "/customers/create_customer",
+        "/customers/get_customer",
+        "/subscriptions/create_subscription",
+        "/subscriptions/cancel_subscription",
+        "/webhooks/webhook_receiver",
+        "/dashboard/get_dashboard_data",
+    ]
+
+    for path_substr in expected_substrings:
+        # Ensure each path is included among the app's routes
+        assert any(path_substr in rp for rp in route_paths), f"Expected path '{path_substr}' not found in routes."
+
+def test_create_app_basic_response(client):
+    """
+    Test that the app can handle a basic request.
+    Even if '/' is not defined, it should return 404 instead of erroring out.
     """
     response = client.get("/")
-    # Depending on router configuration, either assert a valid response or 404
-    # If there's a root endpoint, check for 200. Otherwise, check for 404.
-    assert response.status_code in [200, 404], "FastAPI client call should return 200 or 404 by default"
+    assert response.status_code in [200, 404], "Root path should return either 200 (if defined) or 404"
 
-# -----------------------------------------------------------------------------------
-# Tests for run_app()
-# -----------------------------------------------------------------------------------
-def test_run_app_calls_uvicorn_run():
+# --------------------------------------------------------------------------------
+# TESTS FOR run_app()
+# --------------------------------------------------------------------------------
+def test_run_app_success():
     """
-    Test that run_app() invokes uvicorn.run() to start the server.
+    Test that run_app() attempts to start the server using uvicorn with default parameters.
+    This test uses a mock to ensure uvicorn.run is called without actually starting the server.
     """
-    with patch("..main.uvicorn.run") as mock_uvicorn:
+    with patch("main.uvicorn.run") as mock_run:
         run_app()
-        mock_uvicorn.assert_called_once(), "uvicorn.run() should be called once when run_app() is invoked"
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert "main:create_app" in args or kwargs.get("app") == "main:create_app", \
+            "Expected uvicorn.run to be called with 'main:create_app'"
 
-def test_run_app_with_custom_parameters():
+def test_run_app_with_custom_port():
     """
-    Test that run_app() can run with custom host/port parameters.
+    Test that run_app() can be called with a custom port number
+    and uvicorn.run is invoked with that port.
     """
-    custom_host = "127.0.0.1"
-    custom_port = 8001
-    with patch("..main.uvicorn.run") as mock_uvicorn:
-        run_app(host=custom_host, port=custom_port)
-        mock_uvicorn.assert_called_once()
-        args, kwargs = mock_uvicorn.call_args
-        # Check that uvicorn.run is called with the custom host/port
-        assert kwargs.get("host") == custom_host, "uvicorn.run() should receive the custom host from run_app()"
-        assert kwargs.get("port") == custom_port, "uvicorn.run() should receive the custom port from run_app()"
+    with patch("main.uvicorn.run") as mock_run:
+        run_app(port=9000)
+        mock_run.assert_called_once()
+        args, kwargs = mock_run.call_args
+        assert kwargs.get("port") == 9000, \
+            "Expected uvicorn.run to be called with port=9000"
+
+def test_run_app_invalid_port():
+    """
+    Test that run_app() raises an error when provided an invalid port number
+    and that uvicorn.run is not called.
+    """
+    with patch("main.uvicorn.run") as mock_run:
+        with pytest.raises(ValueError, match="Invalid port number"):
+            run_app(port=-1)
+        mock_run.assert_not_called()

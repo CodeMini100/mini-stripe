@@ -1,135 +1,107 @@
 import pytest
-from unittest.mock import patch, MagicMock
-from fastapi.testclient import TestClient
+from unittest.mock import MagicMock, patch
 from sqlalchemy.orm import Session
 
-# Import the functions we want to test
-from ...payments.payments_service import create_charge, refund_charge
-# Import any models you might need to verify database changes
-# (Assuming there's a Payment model or similar in your code)
-from ...models import PaymentRecord
-
+# Import the functions to test from the project root
+from payments.payments_service import create_charge, refund_charge
 
 @pytest.fixture
-def db_session():
+def mock_db_session():
     """
-    Fixture to provide a database session for tests.
-    This can be configured to use an in-memory or test-specific database.
+    Fixture that returns a mock Session object for testing.
+    This allows us to track calls to the database without using a real DB.
     """
-    # Setup
-    # Example: Use an in-memory database or a transactional context
-    # session = setup_test_db_session()
-    # yield session
-    # Teardown
-    # session.close()
-    pass
+    return MagicMock(spec=Session)
 
 
-class TestPaymentsService:
-    """
-    Tests for the payments_service module which includes create_charge and refund_charge.
-    """
-
-    @pytest.mark.parametrize(
-        "customer_id, amount, payment_method",
-        [
-            (1, 100.00, "credit_card"),
-            (2, 59.99, "paypal"),
-        ],
-    )
-    @patch("...payments.payments_service.SomePaymentProvider")  # Example: Patch a provider
-    def test_create_charge_success(
-        self, mock_payment_provider, db_session, customer_id, amount, payment_method
-    ):
-        """
-        Test that create_charge succeeds when the payment provider processes the charge without errors.
-        We mock the payment provider to simulate a successful charge.
-        """
+@pytest.mark.describe("Test create_charge function")
+class TestCreateCharge:
+    @pytest.mark.it("Should create a charge record successfully given valid inputs")
+    @patch("payments.payments_service.log_info")  # Example: mocking a logging call if it exists
+    def test_create_charge_success(self, mock_log, mock_db_session):
         # Arrange
-        mock_instance = MagicMock()
-        mock_instance.charge.return_value = {"status": "success"}
-        mock_payment_provider.return_value = mock_instance
-
-        # Act
-        charge_record = create_charge(customer_id, amount, payment_method)
-
-        # Assert
-        # Verify the payment provider was called
-        mock_instance.charge.assert_called_once_with(
-            customer_id=customer_id,
-            amount=amount,
-            payment_method=payment_method
-        )
-        # Verify that a charge record has the expected data (depending on the structure of your record)
-        assert charge_record.customer_id == customer_id
-        assert charge_record.amount == amount
-        assert charge_record.payment_method == payment_method
-        # You may also verify that the record is stored in DB if your function writes to it
-        # Example: db_session.query(PaymentRecord).filter_by(id=charge_record.id).one()
-
-    @patch("...payments.payments_service.SomePaymentProvider")  # Example: Patch a provider
-    def test_create_charge_error(self, mock_payment_provider, db_session):
-        """
-        Test that create_charge handles an error from the payment provider gracefully.
-        We mock the payment provider to raise an exception or return an error response.
-        """
-        # Arrange
-        customer_id = 3
-        amount = 200.00
+        customer_id = 123
+        amount = 49.99
         payment_method = "credit_card"
 
-        mock_instance = MagicMock()
-        mock_instance.charge.side_effect = Exception("Payment provider failed")
-        mock_payment_provider.return_value = mock_instance
+        # We might want to mock an external payment call or any internal logic
+        # For example, if there's a function that handles payment processing:
+        with patch("payments.payments_service.simulate_payment", return_value=True) as mock_payment:
+            # Act
+            charge = create_charge(customer_id, amount, payment_method, db_session=mock_db_session)
 
-        # Act & Assert
-        with pytest.raises(Exception, match="Payment provider failed"):
-            create_charge(customer_id, amount, payment_method)
+            # Assert
+            mock_payment.assert_called_once_with(customer_id, amount, payment_method)
+            mock_db_session.add.assert_called_once()  # Check if charge was added to the session
+            mock_db_session.commit.assert_called_once()  # Check if session was committed
+            assert charge.customer_id == customer_id
+            assert charge.amount == amount
+            assert charge.payment_method == payment_method
+            assert charge.status == "succeeded"  # Assuming a 'succeeded' status is set upon success
 
-        # Verify the payment provider was called
-        mock_instance.charge.assert_called_once()
-
-    @patch("...payments.payments_service.SomePaymentProvider")  # Example: Patch a provider
-    def test_refund_charge_success(self, mock_payment_provider, db_session):
-        """
-        Test that refund_charge updates the charge record to reflect a refund.
-        We mock the payment provider to simulate a successful refund.
-        """
+    @pytest.mark.it("Should handle error when external payment simulation fails")
+    def test_create_charge_payment_failure(self, mock_db_session):
         # Arrange
-        # Create or retrieve a charge record (depending on your setup)
-        # Example: assume we create a PaymentRecord object for testing
-        charge_id = 10
-        mock_instance = MagicMock()
-        mock_instance.refund.return_value = {"status": "success"}
-        mock_payment_provider.return_value = mock_instance
+        customer_id = 123
+        amount = 49.99
+        payment_method = "credit_card"
+
+        # Suppose simulate_payment returns False or raises an exception on failure
+        with patch("payments.payments_service.simulate_payment", return_value=False):
+            # Act
+            charge = create_charge(customer_id, amount, payment_method, db_session=mock_db_session)
+
+            # Assert
+            mock_db_session.add.assert_called_once()
+            mock_db_session.commit.assert_called_once()
+            assert charge.status == "failed"  # Assuming the service sets status to 'failed'
+
+
+@pytest.mark.describe("Test refund_charge function")
+class TestRefundCharge:
+    @pytest.mark.it("Should successfully refund a previously succeeded charge")
+    def test_refund_charge_success(self, mock_db_session):
+        # Arrange
+        charge_id = 999
+        
+        # Mock the DB to return a charge that can be refunded
+        mock_charge = MagicMock()
+        mock_charge.status = "succeeded"
+        
+        mock_db_session.query.return_value.filter_by.return_value.first.return_value = mock_charge
 
         # Act
-        updated_record = refund_charge(charge_id)
+        refunded_charge = refund_charge(charge_id, db_session=mock_db_session)
 
         # Assert
-        # Verify the provider was called
-        mock_instance.refund.assert_called_once_with(charge_id=charge_id)
-        # Check if the record was updated as expected (e.g. refunded == True)
-        assert updated_record.is_refunded is True
-        # You may also check DB to ensure the change was persisted
-        # Example: updated_in_db = db_session.query(PaymentRecord).filter_by(id=charge_id).one()
-        # assert updated_in_db.is_refunded is True
+        assert refunded_charge.status == "refunded"
+        mock_db_session.commit.assert_called_once()
 
-    @patch("...payments.payments_service.SomePaymentProvider")  # Example: Patch a provider
-    def test_refund_charge_error(self, mock_payment_provider, db_session):
-        """
-        Test that refund_charge handles an error from the payment provider gracefully.
-        We mock the payment provider to raise an exception.
-        """
+    @pytest.mark.it("Should return None or handle error if charge not found")
+    def test_refund_charge_not_found(self, mock_db_session):
         # Arrange
-        charge_id = 99
-        mock_instance = MagicMock()
-        mock_instance.refund.side_effect = Exception("Refund failed")
-        mock_payment_provider.return_value = mock_instance
+        charge_id = 404
+        mock_db_session.query.return_value.filter_by.return_value.first.return_value = None
 
-        # Act & Assert
-        with pytest.raises(Exception, match="Refund failed"):
-            refund_charge(charge_id)
+        # Act
+        refunded_charge = refund_charge(charge_id, db_session=mock_db_session)
 
-        # Verify the provider was called
-        mock_instance.refund.assert_called_once_with(charge_id=charge_id)
+        # Assert
+        assert refunded_charge is None  # Or check for an exception, depending on the implementation
+        mock_db_session.commit.assert_not_called()
+
+    @pytest.mark.it("Should handle already refunded charges gracefully")
+    def test_refund_charge_already_refunded(self, mock_db_session):
+        # Arrange
+        charge_id = 888
+        mock_charge = MagicMock()
+        mock_charge.status = "refunded"  # Already refunded
+        
+        mock_db_session.query.return_value.filter_by.return_value.first.return_value = mock_charge
+
+        # Act
+        refunded_charge = refund_charge(charge_id, db_session=mock_db_session)
+
+        # Assert
+        assert refunded_charge.status == "refunded"  # No change
+        mock_db_session.commit.assert_not_called()  # No new DB write needed if it's already refunded

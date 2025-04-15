@@ -1,87 +1,105 @@
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from sqlalchemy.orm import Session
 
-# Router import from the subscriptions module
-from ...subscriptions.subscriptions_router import router
+# Import application factory and configuration
+from main import create_app
+from config import load_config
 
-@pytest.fixture
+
+@pytest.fixture(scope="module")
 def client():
     """
-    Setup a FastAPI TestClient with the subscriptions router.
-    Teardown happens automatically after tests complete.
+    Fixture to create a TestClient instance for the FastAPI application.
     """
-    app = FastAPI()
-    app.include_router(router, prefix="/subscriptions")
+    # Load any necessary config (if applicable)
+    load_config()
+    app = create_app()
     return TestClient(app)
 
 
-@pytest.mark.parametrize("request_data, expected_status", [
-    # Test valid subscription creation data
-    ({"customer_id": 1, "plan_id": 2}, 200),
-    # Test another valid scenario or variation if needed
-    ({"customer_id": 2, "plan_id": 3}, 200),
-])
-def test_create_subscription_endpoint_success(client, request_data, expected_status):
+@pytest.fixture
+def mock_db_session():
     """
-    Test successful subscription creation cases.
+    If testing requires a mocked database session, provide one here.
+    Replace or extend with actual DB setup/teardown as needed.
     """
-    with patch("...subscriptions.subscriptions_router.create_subscription_in_db") as mock_create_subscription:
-        # Mock the return value to mimic successful DB insertion
-        mock_create_subscription.return_value = {"id": 123, **request_data, "status": "active"}
-
-        response = client.post("/", json=request_data)
-        assert response.status_code == expected_status
-        data = response.json()
-        assert "id" in data
-        assert data["status"] == "active"
-        mock_create_subscription.assert_called_once()
+    # In real scenarios, you might mock or use a test DB session here
+    # For demonstration, we return None or a mock object
+    return None
 
 
-def test_create_subscription_endpoint_plan_not_found(client):
+def test_create_subscription_successful(client, mock_db_session):
     """
-    Test subscription creation failure when plan is not found.
+    Test that creating a subscription with valid data returns a successful response (201).
+    Mocks the subscriptions_service.create_subscription to simulate DB interaction.
     """
-    request_data = {"customer_id": 1, "plan_id": 999}
-    with patch("...subscriptions.subscriptions_router.create_subscription_in_db") as mock_create_subscription:
-        # Simulate an exception or None return to indicate plan not found
-        mock_create_subscription.side_effect = ValueError("Plan not found")
+    request_data = {
+        "customer_id": "cust_123",
+        "plan_id": "plan_pro"
+    }
 
-        response = client.post("/", json=request_data)
-        assert response.status_code == 404
-        assert "detail" in response.json()
-        mock_create_subscription.assert_called_once()
+    with patch("subscriptions.subscriptions_service.create_subscription") as mock_create:
+        # Simulate a successful subscription creation
+        mock_create.return_value = {
+            "subscription_id": "sub_456",
+            "customer_id": "cust_123",
+            "plan_id": "plan_pro",
+            "status": "active"
+        }
+        response = client.post("/subscriptions", json=request_data)
+
+    assert response.status_code == 201
+    assert response.json()["subscription_id"] == "sub_456"
+    assert response.json()["status"] == "active"
 
 
-def test_cancel_subscription_endpoint_success(client):
+def test_create_subscription_invalid_data(client, mock_db_session):
     """
-    Test successful subscription cancellation.
+    Test that creating a subscription with invalid or missing data returns an error (422 or 400).
     """
-    subscription_id = 123
-    with patch("...subscriptions.subscriptions_router.cancel_subscription_in_db") as mock_cancel_subscription:
-        # Mock the return to show the subscription was successfully canceled
-        mock_cancel_subscription.return_value = {"id": subscription_id, "status": "canceled"}
+    # Missing "plan_id"
+    request_data = {
+        "customer_id": "cust_123"
+    }
 
-        response = client.delete(f"/{subscription_id}")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["id"] == subscription_id
-        assert data["status"] == "canceled"
-        mock_cancel_subscription.assert_called_once_with(subscription_id)
+    response = client.post("/subscriptions", json=request_data)
+
+    # Expected to fail validation or return error
+    assert response.status_code in (400, 422)
+    assert "detail" in response.json()
 
 
-def test_cancel_subscription_endpoint_not_found(client):
+def test_cancel_subscription_successful(client, mock_db_session):
     """
-    Test subscription cancellation failure when subscription is not found.
+    Test that cancelling an existing subscription returns a successful response (200).
+    Mocks the subscriptions_service.cancel_subscription to simulate DB interaction.
     """
-    subscription_id = 999
-    with patch("...subscriptions.subscriptions_router.cancel_subscription_in_db") as mock_cancel_subscription:
-        # Simulate not found scenario
-        mock_cancel_subscription.side_effect = ValueError("Subscription not found")
+    subscription_id = "sub_456"
 
-        response = client.delete(f"/{subscription_id}")
-        assert response.status_code == 404
-        assert "detail" in response.json()
-        mock_cancel_subscription.assert_called_once_with(subscription_id)
+    with patch("subscriptions.subscriptions_service.cancel_subscription") as mock_cancel:
+        # Simulate a successful subscription cancellation
+        mock_cancel.return_value = {
+            "subscription_id": subscription_id,
+            "status": "canceled"
+        }
+        response = client.post(f"/subscriptions/{subscription_id}/cancel")
+
+    assert response.status_code == 200
+    assert response.json()["subscription_id"] == subscription_id
+    assert response.json()["status"] == "canceled"
+
+
+def test_cancel_subscription_not_found(client, mock_db_session):
+    """
+    Test that cancelling a non-existent subscription returns a 404 response.
+    """
+    subscription_id = "sub_non_existent"
+
+    # Simulate the service raising an exception or returning None for non-existent subscription
+    with patch("subscriptions.subscriptions_service.cancel_subscription", side_effect=ValueError("Not found")):
+        response = client.post(f"/subscriptions/{subscription_id}/cancel")
+
+    assert response.status_code == 404
+    assert "detail" in response.json()
